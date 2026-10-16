@@ -31,7 +31,7 @@ local _wait   = (task and task.wait) or wait
 local _delay  = (task and task.delay) or delay
 local _spawn  = (task and task.spawn) or function(f) coroutine.wrap(f)() end
 local _unpack = table.unpack or unpack
-local DEBUG   = true
+local DEBUG   = false
 
 --=============================== CONSTANTS ==============================
 local TARGET_POS = Vector3.new(-57.3561363, 22.9888306, 488.23172)
