@@ -465,4 +465,630 @@ local function inDomain(model)
         local ok, inside = pcall(function()
             local cf, size
             if dom:IsA("BasePart") then
-                cf, s
+                cf, size = dom.CFrame, dom.Size
+            elseif dom:IsA("Model") then
+                cf, size = dom:GetBoundingBox()
+            else
+                return false
+            end
+            local rel = cf:PointToObjectSpace(pos)
+            local h = size * 0.5
+            return math.abs(rel.X) <= h.X and math.abs(rel.Y) <= h.Y and math.abs(rel.Z) <= h.Z
+        end)
+        if ok and inside then return true end
+    end
+    return false
+end
+
+local function validTargets(skipName)
+    local out = {}
+    local myRoot = getHRP()
+    local myPos = myRoot and myRoot.Position or TARGET_POS
+    local now = os.clock()
+    local plrs = Players:GetPlayers()
+    for i = 1, #plrs do
+        local p = plrs[i]
+        if p ~= LP and p.Name ~= skipName then
+            local ch = p.Character
+            local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+            local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+            local bl = blacklist[p.Name]
+            local ok = ch and hum and hrp and hum.Health > 0 and not (bl and bl > now)
+            if ok and cfg.AvoidDomains and inDomain(ch) then ok = false end
+            if ok then out[#out + 1] = { name = p.Name, d = (hrp.Position - myPos).Magnitude } end
+        end
+    end
+    table.sort(out, function(a, b) return a.d < b.d end)
+    local names = {}
+    for i = 1, #out do names[i] = out[i].name end
+    return names
+end
+
+autoPickTarget = function(skip)
+    local names = validTargets(skip)
+    if #names == 0 then return false end
+    cfg.KidnapTarget = names[1]
+    if refreshUI then refreshUI() end
+    if saveCfg then saveCfg() end
+    return true
+end
+
+cycleTarget = function(dir)
+    local list = { "Dummy" }
+    local names = validTargets(nil)
+    for i = 1, #names do list[#list + 1] = names[i] end
+    local idx = 1
+    for i = 1, #list do
+        if list[i] == cfg.KidnapTarget then idx = i; break end
+    end
+    idx = idx + (dir or 1)
+    if idx > #list then idx = 1 end
+    if idx < 1 then idx = #list end
+    cfg.KidnapTarget = list[idx]
+    refreshUI(); saveCfg()
+end
+
+local function resolveTarget()
+    if cfg.KidnapMode == "Dummy" then
+        return getDummy(), "Dummy"
+    end
+    if cfg.KidnapMode ~= "Player" then return nil, nil end
+
+    local name = cfg.KidnapTarget
+    if not name or name == "Dummy" then
+        local names = validTargets()
+        if #names == 0 then return nil, nil end
+        name = names[1]
+        cfg.KidnapTarget = name
+    end
+    local p = Players:FindFirstChild(name)
+    local ch = p and p.Character
+    local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+    local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+    if not (ch and hum and hrp and hum.Health > 0) then return nil, name end
+    if cfg.AvoidDomains and inDomain(ch) then return nil, name end
+    return ch, name
+end
+
+-- [v5] heartbeat latch: keep us parked behind the target
+stickConn = RunS.Heartbeat:Connect(function()
+    if not running then return end
+    local r, t = stickSelf, stickTarget
+    if not r or not t or not r.Parent or not t.Parent then return end
+    local behind = t.CFrame * BEHIND_OFF
+    r.CFrame = CFrame.lookAt(behind.Position,
+        Vector3.new(t.Position.X, behind.Position.Y, t.Position.Z))
+end)
+
+stopStick = function()
+    stickSelf, stickTarget = nil, nil
+    local c = getChar()
+    local h = c and c:FindFirstChildOfClass("Humanoid")
+    if h then pcall(function() h.AutoRotate = true end) end
+end
+
+local resetRemote
+local function getReset()
+    if resetRemote and resetRemote.Parent then return resetRemote end
+    resetRemote = getRemote("JoinService", "Reset")
+    if resetRemote then return resetRemote end
+    local d = RS:GetDescendants()
+    for i = 1, #d do
+        local x = d[i]
+        if x.Name == "Reset" and x:IsA("RemoteEvent") and x.Parent and x.Parent.Name == "RE" then
+            resetRemote = x
+            return x
+        end
+    end
+    return nil
+end
+
+local function doReset()
+    local rem = getReset()
+    if rem then pcall(function() rem:FireServer() end); return "remote" end
+    local c = getChar()
+    local h = c and c:FindFirstChildOfClass("Humanoid")
+    if h then pcall(function() h.Health = 0 end); return "humanoid" end
+    return nil
+end
+
+--=============================== STEP 1: BYPASS =========================
+local function respawnWait()
+    say("Waiting for respawn...")
+    _wait(0.5)
+    while running do
+        local c = getChar()
+        if c and c:FindFirstChild("HumanoidRootPart")
+            and not c:FindFirstChild("RagdollConstraints") then
+            local h = c:FindFirstChildOfClass("Humanoid")
+            if h and h.Health > 0 then say("Respawn complete."); _wait(0.1); return end
+        end
+        _wait(0.1)
+    end
+end
+
+local function cycles()
+    for i = 1, CYCLES do
+        if not running then return false end
+        local c = getChar()
+        local hrp = getHRP(c)
+        if not c or not hrp then _wait(1); return false end
+        say(("Bypass Cycle %d/%d..."):format(i, CYCLES))
+        c:PivotTo(TARGET_CF)
+        _wait(0.2)
+        hrp = getHRP()
+        local dist = hrp and (hrp.Position - TARGET_POS).Magnitude
+        log(("cycle %d dist %s"):format(i, dist and ("%.1f"):format(dist) or "nil"))
+        if not (hrp and dist and dist <= MAX_DIST) then
+            say("Rubberbanded. Resetting...")
+            return false
+        end
+        say(("Cycle %d: OK"):format(i))
+        _wait(0.1)
+    end
+    return true
+end
+
+local function waitDomains()
+    if not workspace:FindFirstChild("Domains") then return end
+    while running do
+        local d = workspace:FindFirstChild("Domains")
+        if not d or #d:GetChildren() == 0 then break end
+        say("Waiting for Domain to clear...")
+        _wait(0.5)
+    end
+    if running then say("Domain cleared."); _wait(0.2) end
+end
+
+local function bypassRoutine()
+    attempts = 0
+    if ui.attempts then ui.attempts.Text = "Bypass Attempts: 0" end
+    while running do
+        attempts = attempts + 1
+        if ui.attempts then ui.attempts.Text = "Bypass Attempts: " .. attempts end
+        if cycles() then
+            say("Bypass completed.")
+            _wait(1)
+            if cfg.WaitForDomains then waitDomains() end
+            return true
+        end
+        local how = doReset()
+        log("reset via " .. tostring(how))
+        if how then respawnWait() else _wait(0.5) end
+        if not running then return false end
+    end
+    return false
+end
+
+--=============================== STEP 2: FARM ===========================
+local function bindCooldowns(c)
+    local ms = c and c:FindFirstChild("Moveset")
+    if not ms then return end
+    local secs = { ["Rapid Punches"] = 15, ["Twofold Kick"] = 18, ["Reversal Red"] = 12 }
+    for name, cd in pairs(secs) do
+        local mv = ms:FindFirstChild(name)
+        if mv and not watched[mv] then
+            watched[mv] = true
+            pcall(function()
+                mv:GetAttributeChangedSignal("ReadyAt"):Connect(function()
+                    cooldowns[name] = true
+                    _delay(cd, function() cooldowns[name] = false end)
+                end)
+            end)
+        end
+    end
+end
+
+local function dummyFree(d)
+    local info = d and d:FindFirstChild("Info")
+    if not info then return false end
+    local k = info:GetChildren()
+    return #k == 1 and k[1].Name == "Cancel"
+end
+
+local function nobodyNear(d, me, droot)
+    local cs = workspace:FindFirstChild("Characters")
+    if not cs then return false end
+    local k = cs:GetChildren()
+    for i = 1, #k do
+        local m = k[i]
+        if m:IsA("Model") and m ~= me and m ~= d then
+            local r = m:FindFirstChild("HumanoidRootPart")
+            if r and (r.Position - droot.Position).Magnitude <= NEARBY then return false end
+        end
+    end
+    return true
+end
+
+local function firstReadyMove()
+    for i = 1, #KIDNAP_ORDER do
+        local n = KIDNAP_ORDER[i]
+        if not cooldowns[n] then return n end
+    end
+    return nil
+end
+
+local function kidnap(d, c, root, hum, droot)
+    if not dummyFree(d) then say("Waiting for dummy to be free..."); return false end
+    if not nobodyNear(d, c, droot) then say("Waiting: someone is near the dummy..."); return false end
+    local moveName = firstReadyMove()
+    if not moveName then say("Waiting for kidnap move cooldown..."); return false end
+
+    say("Kidnapping Dummy with " .. moveName .. "...")
+    local oldRot = hum.AutoRotate
+    local conn
+    local ok, err = pcall(function()
+        hum.AutoRotate = false
+        conn = RunS.Heartbeat:Connect(function()
+            if not root.Parent or not droot.Parent then
+                if conn then conn:Disconnect(); conn = nil end
+                return
+            end
+            root.CFrame = CFrame.new(root.Position,
+                Vector3.new(droot.Position.X, root.Position.Y, droot.Position.Z))
+        end)
+        _delay(1, function()
+            if conn then pcall(function() conn:Disconnect() end); conn = nil end
+            if hum and hum.Parent then pcall(function() hum.AutoRotate = oldRot end) end
+        end)
+        tryMove(c, moveName)
+        _wait(0.3)
+        if not running or not root.Parent or not droot.Parent then return end
+        root.CFrame = droot.CFrame * DUMMY_OFF
+        _wait(0.4)
+        -- [v5] finisher: Reversal Red if it is up
+        if not cooldowns["Reversal Red"] then tryMove(c, "Reversal Red") end
+        if not running or not root.Parent then return end
+        root.CFrame = KIDNAP_RETURN_CF
+        _wait(4)
+    end)
+    if conn then pcall(function() conn:Disconnect() end); conn = nil end
+    if hum and hum.Parent then pcall(function() hum.AutoRotate = oldRot end) end
+    if not ok then say("Kidnap failed: " .. tostring(err)); _wait(0.5); return false end
+    return true
+end
+
+local function attack(c, noDash)
+    local ms = c and c:FindFirstChild("Moveset")
+    if not ms then return end
+    fire("GojoService", "Activated", "Up", nil)
+    local rr = ms:FindFirstChild("Reversal Red")
+    if rr then fire("ReversalRedService", "Activated", rr, nil) end
+    local rp = ms:FindFirstChild("Rapid Punches")
+    if rp then fire("RapidPunchesService", "Activated", rp, nil) end
+    local tk = ms:FindFirstChild("Twofold Kick")
+    if tk then fire("TwofoldKickService", "Activated", tk, nil) end
+    if not noDash then fire("MovementService", "Dash", "Back", true) end
+end
+
+local function lightAttack(c)
+    fire("GojoService", "Activated", "Up", nil)
+end
+
+-- [v5] player mode: latch behind the target, pressure with the 3 moves,
+--      bail out on death / domain / repeated damage
+local function playerKidnapTick(c, root, hum)
+    local tgt, tname = resolveTarget()
+    if not tgt then
+        stopStick()
+        say("No valid target player - waiting...")
+        _wait(0.4)
+        return
+    end
+    local troot = tgt:FindFirstChild("HumanoidRootPart")
+    local thum = tgt:FindFirstChildOfClass("Humanoid")
+    if not troot or not thum or thum.Health <= 0 then
+        say((tname or "target") .. " is down - switching target...")
+        if tname then blacklist[tname] = os.clock() + 3 end
+        stopStick()
+        autoPickTarget(tname)
+        _wait(0.2)
+        return
+    end
+    if cfg.AvoidDomains and inDomain(tgt) then
+        say((tname or "target") .. " is inside a Domain - switching...")
+        stopStick()
+        autoPickTarget(tname)
+        _wait(0.2)
+        return
+    end
+
+    -- damage watch -> switch on repeated hits
+    if dmgState.target ~= tname then
+        dmgState.target = tname
+        dmgState.health = hum.Health
+        dmgState.hits = {}
+    end
+    if dmgState.health and hum.Health < dmgState.health - 0.01 then
+        local now = os.clock()
+        local keep = { now }
+        for i = 1, #dmgState.hits do
+            if now - dmgState.hits[i] <= DMG_WINDOW then keep[#keep + 1] = dmgState.hits[i] end
+        end
+        dmgState.hits = keep
+        if #keep >= DMG_LIMIT then
+            say("Taking repeated damage - switching target...")
+            blacklist[tname] = now + 6
+            dmgState.hits = {}
+            dmgState.target = nil
+            stopStick()
+            autoPickTarget(tname)
+            return
+        end
+    end
+    dmgState.health = hum.Health
+
+    -- latch behind + keep the three moves going
+    stickSelf, stickTarget = root, troot
+    hum.AutoRotate = false
+
+    local now = os.clock()
+    if now - lastGrab >= 0.3 then
+        local mv = firstReadyMove()
+        if mv then
+            tryMove(c, mv)
+            say(("Kidnap %s -> %s"):format(tname, mv))
+            lastGrab = now
+        end
+    end
+    if now - lastLight >= 0.6 then
+        lightAttack(c)
+        lastLight = now
+    end
+    _wait(STICK_TICK)
+end
+
+local function farmRoutine()
+    local lastUlt, lastGain, lastNag = getUlt(), os.clock(), 0
+    say("Farming Ult")
+    while running do
+        local u = getUlt()
+        if ui.ult then ui.ult.Text = ("Ultimate: %.0f%% / %d%%"):format(u, ULT_GOAL) end
+        if u >= ULT_GOAL then stopStick(); say("Maxed Ult"); return "completed" end
+        if u > lastUlt then
+            lastUlt, lastGain = u, os.clock()
+        elseif os.clock() - lastGain >= STALL_LIMIT and os.clock() - lastNag >= 10 then
+            say("No meter gain - restarting from bypass...")
+            lastNag = os.clock()
+            stopStick()
+            return "restart"
+        end
+
+        local c = getChar()
+        local root = getHRP(c)
+        local hum = c and c:FindFirstChildOfClass("Humanoid")
+
+        if not Services then
+            say("Knit Services not found")
+            return "stopped"
+        elseif not c or not root or not hum or hum.Health <= 0 then
+            say("Waiting for your character...")
+            stopStick()
+            _wait(0.5)
+        elseif cfg.KidnapMode == "Player" then
+            bindCooldowns(c)
+            playerKidnapTick(c, root, hum)
+        else
+            local d = getDummy()
+            local droot = d and d:FindFirstChild("HumanoidRootPart")
+            if not d or not droot then
+                say("Waiting for workspace.Characters.Dummy...")
+                stopStick()
+                _wait(0.5)
+            else
+                bindCooldowns(c)
+                if cfg.KidnapMode == "Dummy" and (root.Position - droot.Position).Magnitude > CLOSE_DIST then
+                    if not kidnap(d, c, root, hum, droot) then _wait(0.25) end
+                else
+                    say(("Farming Dummy - %.0f%%"):format(u))
+                    pcall(function() root.CFrame = droot.CFrame * DUMMY_OFF end)
+                    attack(c)
+                    _wait(FARM_TICK)
+                end
+            end
+        end
+    end
+    stopStick()
+    return "stopped"
+end
+
+--=============================== STEP 3: POP & KILL =====================
+local function waitStun()
+    while running do
+        local i = getInfo()
+        if not i or not i:FindFirstChild("Stun") then return end
+        say("Waiting for stun to end...")
+        _wait(0.1)
+    end
+end
+
+local function waitInSkill(timeout)
+    local t0 = os.clock()
+    repeat
+        local i = getInfo()
+        if i and i:FindFirstChild("InSkill") then return true end
+        _wait(0.05)
+    until os.clock() - t0 > (timeout or 5) or not running
+    return false
+end
+
+local function killAll()
+    local i = getInfo()
+    if not i or not i:FindFirstChild("InSkill") then
+        say("InSkill not active - skipping kill")
+        return
+    end
+    say("Killing all players")
+    local idx = 1
+    while running do
+        local i2 = getInfo()
+        if not i2 or not i2:FindFirstChild("InSkill") then break end
+        local myHRP = getHRP()
+        local me = getChar()
+        local cs = workspace:FindFirstChild("Characters")
+        if myHRP and cs then
+            local targets = {}
+            local k = cs:GetChildren()
+            for n = 1, #k do
+                local m = k[n]
+                if m:IsA("Model") and m ~= me then
+                    local hrp = m:FindFirstChild("HumanoidRootPart")
+                    local hum = m:FindFirstChildOfClass("Humanoid")
+                    if hrp and hum and hum.Health > 0 then targets[#targets + 1] = hrp end
+                end
+            end
+            if #targets > 0 then
+                if idx > #targets then idx = 1 end
+                myHRP.CFrame = targets[idx].CFrame * KILL_OFF
+                idx = idx + 1
+            end
+        end
+        _wait(0.01)
+    end
+    say("InSkill ended - stopping teleport")
+end
+
+local function popUltKill()
+    stopStick()
+    waitStun()
+    if not running then return end
+    local c = getChar()
+    if c then c:PivotTo(TARGET_CF) end
+    say("Anti Bug Delay")
+    _wait(1)
+    if not running then return end
+    if cfg.WaitForDomains then waitDomains() end
+    if not running then return end
+    say("Activating 0.2 Domain")
+    fire("GojoService", "Ultimate")
+    _wait(0.3)
+    fire("GojoService", "RightActivated", nil)
+    _wait(4.5)
+    if running and waitInSkill(5) then killAll() end
+    _wait(1)
+    if not running then return end
+    if cfg.AutoEndAction then
+        if cfg.EndMode == "Leave" then
+            say("Leaving game...")
+            _wait(1)
+            pcall(function() LP:Kick("Done!") end)
+        else
+            say("Preparing to Hop Server...")
+            _wait(1)
+            fire("RankedService", "Teleport", 2)
+        end
+    else
+        say("Task finished.")
+    end
+end
+
+--=============================== WORKER =================================
+local function worker()
+    while running do
+        local restart = false
+        if cfg.AutoBypass then
+            if not bypassRoutine() or not running then return end
+            _wait(1)
+        end
+        if cfg.AutoFarm then
+            local res = farmRoutine()
+            if res == "restart" then restart = true
+            elseif res ~= "completed" or not running then return end
+        end
+        if not restart then
+            if cfg.AutoPopUlt then popUltKill() else say("Task finished.") end
+            return
+        end
+    end
+end
+
+--=============================== DIAGNOSTICS ============================
+local function diag()
+    print("======== EZ02 DIAG ========")
+    print("target:", tostring(TARGET_POS))
+    local s = getSvcFolder()
+    print("Services:", s and s:GetFullName() or "NOT FOUND")
+    if s then
+        local k = s:GetChildren()
+        for i = 1, #k do
+            local re = k[i]:FindFirstChild("RE")
+            local names = {}
+            if re then
+                local r = re:GetChildren()
+                for j = 1, #r do table.insert(names, r[j].Name) end
+            end
+            print("  " .. k[i].Name .. " RE[" .. #names .. "]: " .. table.concat(names, ", "))
+        end
+    end
+    print("Reset remote:", getReset() and "found" or "NOT FOUND")
+    print("ult:", getUlt(), "dummy:", getDummy() and "found" or "NOT FOUND")
+    print("kidnap mode:", cfg.KidnapMode, "target:", tostring(cfg.KidnapTarget))
+    print("valid targets:", table.concat(validTargets(), ", "))
+    print("gui:", ui.gui and ui.gui:GetFullName() or "none")
+    print("===========================")
+end
+
+startWorker = function()
+    if running then
+        running = false
+        stopStick()
+        say("Stopped by user")
+        refreshUI(); saveCfg()
+        return
+    end
+    if not refreshServices() then say("Knit Services not found"); return end
+    running, attempts = true, 0
+    if ui.attempts then ui.attempts.Text = "Bypass Attempts: 0" end
+    refreshUI(); saveCfg()
+    say("Starting...")
+    diag()
+    _spawn(function()
+        local ok, err = pcall(worker)
+        if not ok then say("Error: " .. tostring(err)) end
+        running = false
+        stopStick()
+        refreshUI(); saveCfg()
+    end)
+end
+
+--=============================== BOOT ===================================
+loadCfg()
+if guiOk and ui.start then
+    ui.start.MouseButton1Click:Connect(startWorker)
+    paintToggles()
+    refreshUI()
+    say("Ready - press START")
+end
+
+stage("3/4 functions ok")
+
+GENV.EZ02_TOKEN = TOKEN
+GENV.EZ02_GUI   = ui.gui
+GENV.EZ02_Start = startWorker
+GENV.EZ02_Diag  = diag
+GENV.EZ02_Show  = function()
+    if ui.gui then
+        ui.gui.Enabled = true
+        ui.gui.Parent = LP:WaitForChild("PlayerGui")
+    end
+end
+GENV.EZ02_Stop  = function()
+    running = false
+    stopStick()
+    say("Stopped")
+    refreshUI()
+end
+
+task.spawn(function()
+    while true do
+        _wait(1)
+        if GENV.EZ02_TOKEN ~= TOKEN then return end
+        if ui.gui and not ui.gui.Parent then
+            pcall(function() ui.gui.Parent = LP:WaitForChild("PlayerGui", 3) end)
+        end
+    end
+end)
+
+stage("4/4 ready")
+print("[EZ02 v5] done. window: " .. (ui.gui and "yes" or "NO"))
+```
