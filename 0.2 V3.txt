@@ -1,0 +1,468 @@
+--====================================================================
+--  EZ 0.2 SCRIPT  ·  ALL IN ONE  [v5 KIDNAP-MODE]
+--  1 Auto Bypass -> 2 Auto Farm Dummy -> 3 Auto Pop Ult & Kill -> 4 End
+--
+--  v5 CHANGES
+--   · "- Auto Kidnap Dummy" is now a MODE SELECTOR: Off / Dummy / Player
+--   · New "- Target:" selector (click = next, right-click = previous)
+--   · Player mode latches you BEHIND the selected target (heartbeat lock)
+--   · Kidnap set = Rapid Punches, Twofold Kick, Reversal Red
+--   · Targets inside workspace.Domains are skipped / dropped
+--   · Repeated damage (3 hits / 5s) auto-switches to another target
+--====================================================================
+print("[EZ02 v5] 1/4 top")
+
+local GENV0 = (type(getgenv) == "function" and getgenv()) or _G
+if GENV0.EZ02_Stop then pcall(GENV0.EZ02_Stop) end
+GENV0.EZ02_TOKEN = nil
+
+local Players = game:GetService("Players")
+local RS      = game:GetService("ReplicatedStorage")
+local UIS     = game:GetService("UserInputService")
+local RunS    = game:GetService("RunService")
+local HS      = game:GetService("HttpService")
+local LP      = Players.LocalPlayer
+
+local GENV = (type(getgenv) == "function" and getgenv()) or _G
+local TOKEN = {}
+
+local _wait   = (task and task.wait) or wait
+local _delay  = (task and task.delay) or delay
+local _spawn  = (task and task.spawn) or function(f) coroutine.wrap(f)() end
+local _unpack = table.unpack or unpack
+local DEBUG   = true
+
+--=============================== CONSTANTS ==============================
+local TARGET_POS = Vector3.new(-57.3561363, 22.9888306, 488.23172)
+local TARGET_CF  = CFrame.new(TARGET_POS)
+local MAX_DIST   = 20
+local CYCLES     = 3
+local KIDNAP_RETURN_CF = CFrame.new(-147.833298, -30.7250881, -227.811417,
+    0.970708251, -2.46936587e-08, 0.240261301,
+    -2.45447391e-12, 1, 1.02788263e-07,
+    -0.240261301, -9.97780063e-08, 0.970708251)
+local DUMMY_NAME  = "Dummy"
+local DUMMY_OFF   = CFrame.new(0, 0, 2)
+local KILL_OFF    = CFrame.new(0, 0, 3)
+local CLOSE_DIST  = 25
+local NEARBY      = 15
+local ULT_GOAL    = 100
+local FARM_TICK   = 0.08
+local STALL_LIMIT = 30
+local CFG_FILE    = "ezconfig.txt"
+
+-- [v5] kidnap/attach tuning
+local BEHIND_OFF  = CFrame.new(0, 0, 3)   -- 3 studs behind the target
+local STICK_TICK  = 0.05
+local DMG_WINDOW  = 5                     -- seconds
+local DMG_LIMIT   = 3                     -- hits inside window => switch
+local KIDNAP_ORDER = { "Rapid Punches", "Twofold Kick", "Reversal Red" }
+local KIDNAP_SVC = {
+    ["Rapid Punches"] = "RapidPunchesService",
+    ["Twofold Kick"]  = "TwofoldKickService",
+    ["Reversal Red"]  = "ReversalRedService",
+}
+local MODE_ORDER = { Off = "Dummy", Dummy = "Player", Player = "Off" }
+local MODE_BACK  = { Off = "Player", Player = "Dummy", Dummy = "Off" }
+
+local PANEL_SIZE = UDim2.new(0, 260, 0, 360)
+
+local cfg = { AutoBypass = true, AutoFarm = true,
+              KidnapMode = "Dummy", KidnapTarget = "Dummy", AvoidDomains = true,
+              AutoPopUlt = true, AutoEndAction = true,
+              EndMode = "Hop", WaitForDomains = true }
+local KEYS = { "AutoBypass", "AutoFarm", "AvoidDomains", "AutoPopUlt", "AutoEndAction" }
+
+--=============================== STATE ==================================
+local running, attempts = false, 0
+local ui = {}
+local startWorker
+local paintToggles, saveCfg, refreshUI, cycleTarget, autoPickTarget, stopStick
+local Services
+local cooldowns = { ["Rapid Punches"] = false, ["Twofold Kick"] = false, ["Reversal Red"] = false }
+local watched = setmetatable({}, { __mode = "k" })
+
+-- [v5] player-target state
+local blacklist = {}
+local stickSelf, stickTarget, stickConn
+local dmgState = { target = nil, health = nil, hits = {} }
+local lastGrab, lastLight = 0, 0
+
+local function log(...) if DEBUG then print("[EZ02]", ...) end end
+local function stage(t)
+    if ui.stage then ui.stage.Text = "stage " .. t end
+    print("[EZ02 v5] " .. t)
+end
+local function say(t)
+    t = tostring(t)
+    if ui.status then ui.status.Text = "Status: " .. t end
+    if DEBUG then print("[EZ02] " .. t) end
+end
+
+--=============================== GUI ====================================
+local function new(class, parent, props)
+    local o = Instance.new(class)
+    if props then for k, v in pairs(props) do o[k] = v end end
+    if parent then o.Parent = parent end
+    return o
+end
+
+local function isInstance(v)
+    if v == nil then return false end
+    if typeof then return typeof(v) == "Instance" end
+    return type(v) == "userdata"
+end
+
+local OLD_NAMES = { "EZ02ScriptHub", "EZ02", "EZ_02", "EZ 0.2 SCRIPT", "EZ02AllInOne",
+    "AutoBypass", "AutoBypassGUI", "AutoBypassScript", "BypassGUI",
+    "AutoFarmDummy", "AutoFarmDummyGUI", "AutoFarm", "AutoFarmUlt",
+    "AutoUltKill", "AutoUltKillGUI", "AutoUltAndKill", "AutoPopUlt", "AutoKill" }
+
+local function wipeOld()
+    local list = {}
+    local pg = LP:FindFirstChild("PlayerGui")
+    if pg then table.insert(list, pg) end
+    if type(gethui) == "function" then
+        local ok, h = pcall(gethui)
+        if ok and isInstance(h) then table.insert(list, h) end
+    end
+    local ok2, cg = pcall(function() return game:GetService("CoreGui") end)
+    if ok2 and cg then table.insert(list, cg) end
+    local n = 0
+    for i = 1, #list do
+        local kids = list[i]:GetChildren()
+        for j = 1, #kids do
+            local o = kids[j]
+            if o:IsA("ScreenGui") then
+                local kill = false
+                pcall(function() kill = o:GetAttribute("EZ02") == true end)
+                if not kill then
+                    for k = 1, #OLD_NAMES do
+                        if o.Name == OLD_NAMES[k] then kill = true; break end
+                    end
+                end
+                if kill then pcall(function() o:Destroy() end); n = n + 1 end
+            end
+        end
+    end
+    return n
+end
+
+local function buildGui()
+    local pg = LP:WaitForChild("PlayerGui", 10)
+    if not pg then
+        local ok, h = pcall(gethui)
+        pg = (ok and isInstance(h)) and h or nil
+    end
+    if not pg then error("no PlayerGui / gethui available") end
+
+    local sg = new("ScreenGui", pg, { Name = "EZ02ScriptHub", ResetOnSpawn = false,
+        IgnoreGuiInset = true, DisplayOrder = 999 })
+    pcall(function() sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling end)
+    pcall(function() sg:SetAttribute("EZ02", true) end)
+    ui.gui = sg
+
+    local panel = new("Frame", sg, { Name = "Main", Size = PANEL_SIZE,
+        Position = UDim2.new(0.5, -130, 0.15, 0), BackgroundColor3 = Color3.fromRGB(25, 25, 25),
+        BorderSizePixel = 0, ClipsDescendants = true })
+    new("UICorner", panel, { CornerRadius = UDim.new(0, 8) })
+
+    local title = new("TextLabel", panel, { Size = UDim2.new(1, -30, 0, 30),
+        BackgroundTransparency = 1, Text = "EZ 0.2 SCRIPT v5", TextColor3 = Color3.fromRGB(255, 255, 0),
+        Font = Enum.Font.GothamBold, TextSize = 15 })
+    local mini = new("TextButton", panel, { Size = UDim2.new(0, 30, 0, 30),
+        Position = UDim2.new(1, -30, 0, 0), BackgroundTransparency = 1, Text = "-",
+        TextColor3 = Color3.fromRGB(255, 255, 255), Font = Enum.Font.GothamBold, TextSize = 18 })
+
+    ui.stage = new("TextLabel", panel, { Size = UDim2.new(1, -20, 0, 14),
+        Position = UDim2.new(0, 10, 0, 30), BackgroundTransparency = 1, Text = "stage 1/4",
+        TextColor3 = Color3.fromRGB(120, 255, 120), Font = Enum.Font.Code, TextSize = 11,
+        TextXAlignment = Enum.TextXAlignment.Left })
+
+    ui.status = new("TextLabel", panel, { Size = UDim2.new(1, -20, 0, 28),
+        Position = UDim2.new(0, 10, 0, 46), BackgroundTransparency = 1, Text = "Status: idle",
+        TextColor3 = Color3.fromRGB(200, 200, 200), Font = Enum.Font.Gotham, TextSize = 12,
+        TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left })
+
+    ui.attempts = new("TextLabel", panel, { Size = UDim2.new(1, -20, 0, 16),
+        Position = UDim2.new(0, 10, 0, 76), BackgroundTransparency = 1, Text = "Bypass Attempts: 0",
+        TextColor3 = Color3.fromRGB(255, 200, 0), Font = Enum.Font.GothamSemibold, TextSize = 13,
+        TextXAlignment = Enum.TextXAlignment.Left })
+
+    ui.ult = new("TextLabel", panel, { Size = UDim2.new(1, -20, 0, 16),
+        Position = UDim2.new(0, 10, 0, 92), BackgroundTransparency = 1, Text = "Ultimate: 0% / 100%",
+        TextColor3 = Color3.fromRGB(110, 220, 255), Font = Enum.Font.GothamSemibold, TextSize = 12,
+        TextXAlignment = Enum.TextXAlignment.Left })
+
+    -- ---------- toggle rows (kidnap row removed, now a button) ----------
+    ui.toggles = {}
+    local rows = {
+        { k = "AutoBypass",    t = "1. Auto Bypass",          y = 112, ind = false },
+        { k = "AutoFarm",      t = "2. Auto Farm Ultimate",   y = 137, ind = false },
+        { k = "AvoidDomains",  t = "Avoid Domains",           y = 207, ind = true  },
+        { k = "AutoPopUlt",    t = "3. Auto Pop Ult & Kill",  y = 232, ind = false },
+        { k = "AutoEndAction", t = "4. End Action When Done", y = 257, ind = false },
+    }
+    for i = 1, #rows do
+        local d = rows[i]
+        local row = new("Frame", panel, { Size = UDim2.new(1, -20, 0, 22),
+            Position = UDim2.new(0, d.ind and 25 or 10, 0, d.y), BackgroundTransparency = 1 })
+        local box = new("TextButton", row, { Size = UDim2.new(0, 18, 0, 18),
+            Position = UDim2.new(0, 0, 0.5, -9), Text = "" })
+        new("UICorner", box, { CornerRadius = UDim.new(0, 4) })
+        new("TextLabel", row, { Size = UDim2.new(1, -25, 1, 0), Position = UDim2.new(0, 25, 0, 0),
+            BackgroundTransparency = 1, Text = d.t, TextXAlignment = Enum.TextXAlignment.Left,
+            TextColor3 = d.ind and Color3.fromRGB(200, 200, 200) or Color3.fromRGB(255, 255, 255),
+            Font = Enum.Font.Gotham, TextSize = d.ind and 12 or 13 })
+        ui.toggles[d.k] = box
+        box.Activated:Connect(function()
+            cfg[d.k] = not cfg[d.k]
+            paintToggles()
+            saveCfg()
+        end)
+    end
+
+    -- ---------- [v5] kidnap MODE selector (was the Auto Kidnap checkbox) ----------
+    ui.kidnap = new("TextButton", panel, { Name = "KidnapMode", Size = UDim2.new(1, -50, 0, 22),
+        Position = UDim2.new(0, 35, 0, 161), BackgroundColor3 = Color3.fromRGB(45, 45, 50),
+        Text = "- Kidnap: " .. cfg.KidnapMode, TextColor3 = Color3.fromRGB(0, 220, 255),
+        Font = Enum.Font.GothamSemibold, TextSize = 12 })
+    new("UICorner", ui.kidnap, { CornerRadius = UDim.new(0, 4) })
+    ui.kidnap.MouseButton1Click:Connect(function()
+        cfg.KidnapMode = MODE_ORDER[cfg.KidnapMode] or "Off"
+        if cfg.KidnapMode == "Player" then
+            if autoPickTarget then autoPickTarget() end
+        else
+            if stopStick then stopStick() end
+        end
+        refreshUI(); saveCfg()
+    end)
+    ui.kidnap.MouseButton2Click:Connect(function()
+        cfg.KidnapMode = MODE_BACK[cfg.KidnapMode] or "Off"
+        if cfg.KidnapMode ~= "Player" and stopStick then stopStick() end
+        refreshUI(); saveCfg()
+    end)
+
+    -- ---------- [v5] target selector ----------
+    ui.target = new("TextButton", panel, { Name = "KidnapTarget", Size = UDim2.new(1, -50, 0, 22),
+        Position = UDim2.new(0, 35, 0, 185), BackgroundColor3 = Color3.fromRGB(45, 45, 50),
+        Text = "- Target: " .. tostring(cfg.KidnapTarget), TextColor3 = Color3.fromRGB(0, 220, 255),
+        Font = Enum.Font.GothamSemibold, TextSize = 12 })
+    new("UICorner", ui.target, { CornerRadius = UDim.new(0, 4) })
+    ui.target.MouseButton1Click:Connect(function() cycleTarget(1) end)
+    ui.target.MouseButton2Click:Connect(function() cycleTarget(-1) end)
+
+    ui.mode = new("TextButton", panel, { Size = UDim2.new(1, -50, 0, 24),
+        Position = UDim2.new(0, 35, 0, 284), BackgroundColor3 = Color3.fromRGB(45, 45, 50),
+        Text = "Mode: " .. cfg.EndMode, TextColor3 = Color3.fromRGB(0, 220, 255),
+        Font = Enum.Font.GothamSemibold, TextSize = 12 })
+    new("UICorner", ui.mode, { CornerRadius = UDim.new(0, 4) })
+    ui.mode.MouseButton1Click:Connect(function()
+        cfg.EndMode = (cfg.EndMode == "Hop") and "Leave" or "Hop"
+        ui.mode.Text = "Mode: " .. cfg.EndMode
+        saveCfg()
+    end)
+
+    ui.start = new("TextButton", panel, { Size = UDim2.new(0, 200, 0, 35),
+        Position = UDim2.new(0.5, -100, 0, 312), BackgroundColor3 = Color3.fromRGB(0, 150, 0),
+        Text = "START", TextColor3 = Color3.fromRGB(255, 255, 255),
+        Font = Enum.Font.GothamBold, TextSize = 14 })
+    new("UICorner", ui.start, { CornerRadius = UDim.new(0, 6) })
+
+    local drag, ds, sp
+    title.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            drag, ds, sp = true, input.Position, panel.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then drag = false end
+            end)
+        end
+    end)
+    UIS.InputChanged:Connect(function(input)
+        if drag and (input.UserInputType == Enum.UserInputType.MouseMovement
+            or input.UserInputType == Enum.UserInputType.Touch) then
+            local d = input.Position - ds
+            panel.Position = UDim2.new(sp.X.Scale, sp.X.Offset + d.X, sp.Y.Scale, sp.Y.Offset + d.Y)
+        end
+    end)
+
+    local min = false
+    mini.MouseButton1Click:Connect(function()
+        min = not min
+        panel.Size = min and UDim2.new(0, 30, 0, 30) or PANEL_SIZE
+        mini.Text = min and "+" or "-"
+        mini.Size = min and UDim2.new(1, 0, 1, 0) or UDim2.new(0, 30, 0, 30)
+        mini.Position = min and UDim2.new(0, 0, 0, 0) or UDim2.new(1, -30, 0, 0)
+        local kids = panel:GetChildren()
+        for i = 1, #kids do
+            local c = kids[i]
+            if c ~= mini and not c:IsA("UICorner") then c.Visible = not min end
+        end
+    end)
+end
+
+local wiped = 0
+local guiOk, guiErr = pcall(function()
+    wiped = wipeOld()
+    buildGui()
+end)
+
+if not guiOk then
+    print("[EZ02 v5] GUI FAILED: " .. tostring(guiErr))
+    pcall(function()
+        local pg = LP:WaitForChild("PlayerGui", 5)
+        if not pg then return end
+        local sg = new("ScreenGui", pg, { Name = "EZ02ScriptHub", ResetOnSpawn = false })
+        local f = new("Frame", sg, { Size = UDim2.new(0, 340, 0, 110),
+            Position = UDim2.new(0.5, -170, 0.2, 0), BackgroundColor3 = Color3.fromRGB(25, 25, 25) })
+        new("TextLabel", f, { Size = UDim2.new(1, -10, 1, -10), Position = UDim2.new(0, 5, 0, 5),
+            BackgroundTransparency = 1, TextWrapped = true, Font = Enum.Font.Code, TextSize = 12,
+            TextColor3 = Color3.fromRGB(255, 90, 90), Text = "EZ02 GUI error:\n" .. tostring(guiErr) })
+    end)
+end
+
+stage("2/4 gui ok (wiped " .. wiped .. ")")
+
+paintToggles = function()
+    if not ui.toggles then return end
+    for i = 1, #KEYS do
+        local b = ui.toggles[KEYS[i]]
+        if b then
+            b.BackgroundColor3 = cfg[KEYS[i]] and Color3.fromRGB(150, 100, 255)
+                or Color3.fromRGB(50, 50, 50)
+        end
+    end
+    if ui.mode then ui.mode.Text = "Mode: " .. cfg.EndMode end
+end
+
+refreshUI = function()
+    if ui.start then
+        ui.start.Text = running and "STOP" or "START"
+        ui.start.BackgroundColor3 = running and Color3.fromRGB(150, 0, 0) or Color3.fromRGB(0, 150, 0)
+    end
+    paintToggles()
+    if ui.kidnap then
+        ui.kidnap.Text = "- Kidnap: " .. cfg.KidnapMode
+        ui.kidnap.TextColor3 = (cfg.KidnapMode == "Off")
+            and Color3.fromRGB(150, 150, 150) or Color3.fromRGB(0, 220, 255)
+    end
+    if ui.target then
+        ui.target.Text = "- Target: " .. tostring(cfg.KidnapTarget)
+        local on = cfg.KidnapMode == "Player"
+        ui.target.TextColor3 = on and Color3.fromRGB(0, 220, 255) or Color3.fromRGB(140, 140, 140)
+        ui.target.BackgroundColor3 = on and Color3.fromRGB(45, 45, 50) or Color3.fromRGB(32, 32, 35)
+    end
+end
+
+saveCfg = function()
+    if not (writefile and isfile) then return end
+    local t = {}
+    for i = 1, #KEYS do t[KEYS[i]] = cfg[KEYS[i]] end
+    pcall(function() writefile(CFG_FILE, HS:JSONEncode({
+        Toggles = t, Mode = cfg.EndMode,
+        KidnapMode = cfg.KidnapMode, KidnapTarget = cfg.KidnapTarget })) end)
+end
+
+local function loadCfg()
+    if not (readfile and isfile and isfile(CFG_FILE)) then return end
+    local ok, data = pcall(function() return HS:JSONDecode(readfile(CFG_FILE)) end)
+    if not ok or type(data) ~= "table" then return end
+    if type(data.Toggles) == "table" then
+        for k, v in pairs(data.Toggles) do
+            if cfg[k] ~= nil and type(v) == "boolean" then cfg[k] = v end
+        end
+        -- legacy: old boolean AutoKidnap -> new mode
+        if data.KidnapMode == nil and data.Toggles.AutoKidnap ~= nil then
+            cfg.KidnapMode = data.Toggles.AutoKidnap and "Dummy" or "Off"
+        end
+    end
+    if data.Mode == "Hop" or data.Mode == "Leave" then cfg.EndMode = data.Mode end
+    if data.KidnapMode == "Off" or data.KidnapMode == "Dummy" or data.KidnapMode == "Player" then
+        cfg.KidnapMode = data.KidnapMode
+    end
+    if type(data.KidnapTarget) == "string" then cfg.KidnapTarget = data.KidnapTarget end
+end
+
+--=============================== SERVICES ===============================
+local function getSvcFolder()
+    local k = RS:FindFirstChild("Knit")
+    if not k then return nil end
+    local inner = k:FindFirstChild("Knit")
+    return (inner and inner:FindFirstChild("Services")) or k:FindFirstChild("Services")
+end
+
+local function refreshServices()
+    Services = getSvcFolder()
+    if not Services then
+        local d = RS:GetDescendants()
+        for i = 1, #d do
+            if d[i].Name == "Services" then Services = d[i]; break end
+        end
+    end
+    return Services
+end
+
+local function getRemote(s, r)
+    if not Services then refreshServices() end
+    if not Services then return nil end
+    local svc = Services:FindFirstChild(s)
+    local re = svc and svc:FindFirstChild("RE")
+    local rem = re and re:FindFirstChild(r)
+    if rem and rem:IsA("RemoteEvent") then return rem end
+    return nil
+end
+
+local function fire(s, r, ...)
+    local rem = getRemote(s, r)
+    if not rem then return false end
+    local n = select("#", ...)
+    local a = { ... }
+    return pcall(function()
+        if n == 0 then rem:FireServer() else rem:FireServer(_unpack(a, 1, n)) end
+    end)
+end
+
+-- [v5] shared move firer used by both kidnap paths
+local function tryMove(c, moveName)
+    local svc = KIDNAP_SVC[moveName]
+    if not svc then return false end
+    local ms = c and c:FindFirstChild("Moveset")
+    local mv = ms and ms:FindFirstChild(moveName)
+    if not mv then return false end
+    fire(svc, "Activated", mv, nil)
+    return true
+end
+
+--=============================== CHARACTER ==============================
+local function getChar()
+    local c = LP.Character
+    if not c or not c.Parent then
+        local cs = workspace:FindFirstChild("Characters")
+        if cs then c = cs:FindFirstChild(LP.Name) end
+    end
+    return c
+end
+
+local function getHRP(c) c = c or getChar(); return c and c:FindFirstChild("HumanoidRootPart") end
+local function getInfo(c) c = c or getChar(); return c and c:FindFirstChild("Info") end
+local function getDummy()
+    local cs = workspace:FindFirstChild("Characters")
+    return cs and cs:FindFirstChild(DUMMY_NAME)
+end
+local function getUlt() return tonumber(LP:GetAttribute("Ultimate")) or 0 end
+
+--=============================== [v5] TARGETING =========================
+local function inDomain(model)
+    local folder = workspace:FindFirstChild("Domains")
+    if not folder then return false end
+    local hrp = model and model:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false end
+    local pos = hrp.Position
+    local kids = folder:GetChildren()
+    for i = 1, #kids do
+        local dom = kids[i]
+        local ok, inside = pcall(function()
+            local cf, size
+            if dom:IsA("BasePart") then
+                cf, s
