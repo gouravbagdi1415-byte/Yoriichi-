@@ -40,6 +40,7 @@ GENV0.EZ02_TOKEN = nil
 local Players = game:GetService("Players")
 local RS      = game:GetService("ReplicatedStorage")
 local UIS     = game:GetService("UserInputService")
+local TweenS  = game:GetService("TweenService")
 local RunS    = game:GetService("RunService")
 local HS      = game:GetService("HttpService")
 local LP      = Players.LocalPlayer
@@ -100,7 +101,7 @@ local BURST_HP   = 45     -- if target is under this %, stay on them to finish
 local MIN_CYCLE_GAP = 1.5
 
 -- [AFK] row list grew by one, so the panel grew by 25px to match
-local PANEL_SIZE = UDim2.new(0, 344, 0, 680)
+local PANEL_SIZE = UDim2.new(0, 760, 0, 470)
 
 local cfg = { AutoBypass = true, AutoFarm = true,
               KidnapMode = "Dummy", KidnapTarget = "Dummy", AvoidDomains = true,
@@ -195,6 +196,13 @@ local function wipeOld()
     return n
 end
 
+local function uiTween(object, duration, properties)
+    if not object then return end
+    pcall(function()
+        TweenS:Create(object, TweenInfo.new(duration or 0.18, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), properties):Play()
+    end)
+end
+
 local function buildGui()
     local pg = LP and LP:WaitForChild("PlayerGui", 10)
     if not pg then
@@ -203,23 +211,23 @@ local function buildGui()
     end
     if not pg then error("no PlayerGui / gethui available") end
 
-    -- Xector theme: deep navy surfaces, electric cyan accents, soft borders.
+    -- Xector landscape console theme.
     local C = {
-        panel       = Color3.fromRGB(13, 18, 30),
-        panelTop    = Color3.fromRGB(21, 29, 48),
-        card        = Color3.fromRGB(20, 28, 44),
-        row         = Color3.fromRGB(25, 34, 52),
-        rowHover    = Color3.fromRGB(31, 43, 64),
-        border      = Color3.fromRGB(49, 66, 91),
-        accent      = Color3.fromRGB(37, 226, 205),
-        accentBlue  = Color3.fromRGB(87, 145, 255),
-        purple      = Color3.fromRGB(150, 103, 255),
-        green       = Color3.fromRGB(49, 220, 135),
-        red         = Color3.fromRGB(255, 80, 105),
-        gold        = Color3.fromRGB(255, 196, 92),
-        text        = Color3.fromRGB(239, 245, 255),
-        muted       = Color3.fromRGB(151, 166, 190),
-        off         = Color3.fromRGB(43, 55, 75),
+        panel       = Color3.fromRGB(10, 15, 27),
+        panelTop    = Color3.fromRGB(20, 29, 48),
+        card        = Color3.fromRGB(17, 25, 41),
+        row         = Color3.fromRGB(23, 33, 52),
+        rowHover    = Color3.fromRGB(31, 45, 69),
+        border      = Color3.fromRGB(48, 65, 92),
+        accent      = Color3.fromRGB(48, 235, 214),
+        accentBlue  = Color3.fromRGB(95, 151, 255),
+        purple      = Color3.fromRGB(160, 111, 255),
+        green       = Color3.fromRGB(54, 225, 148),
+        red         = Color3.fromRGB(255, 83, 112),
+        gold        = Color3.fromRGB(255, 201, 102),
+        text        = Color3.fromRGB(241, 246, 255),
+        muted       = Color3.fromRGB(145, 162, 190),
+        off         = Color3.fromRGB(43, 55, 76),
         white       = Color3.fromRGB(255, 255, 255),
     }
     ui.theme = C
@@ -237,14 +245,14 @@ local function buildGui()
     local panel = new("Frame", sg, {
         Name = "Main",
         Size = PANEL_SIZE,
-        AnchorPoint = Vector2.new(0.5, 0),
-        Position = UDim2.new(0.5, 0, 0.055, 0),
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.new(0.5, 0, 0.5, 0),
         BackgroundColor3 = C.panel,
         BorderSizePixel = 0,
         ClipsDescendants = true,
     })
-    new("UICorner", panel, { CornerRadius = UDim.new(0, 16) })
-    new("UIStroke", panel, { Color = C.border, Thickness = 1.2, Transparency = 0.12 })
+    new("UICorner", panel, { CornerRadius = UDim.new(0, 17) })
+    new("UIStroke", panel, { Color = C.border, Thickness = 1.2, Transparency = 0.08 })
     new("UIGradient", panel, {
         Color = ColorSequence.new({
             ColorSequenceKeypoint.new(0, C.panelTop),
@@ -252,6 +260,28 @@ local function buildGui()
         }),
         Rotation = 90,
     })
+
+    -- Keep the console landscape-shaped and safely fitted to the current viewport.
+    local uiScale = new("UIScale", panel, { Scale = 1 })
+    ui.scale = uiScale
+    local function bindViewport(camera)
+        if ui.viewportConn then pcall(function() ui.viewportConn:Disconnect() end); ui.viewportConn = nil end
+        local function fitToViewport()
+            local viewport = camera and camera.ViewportSize or Vector2.new(1024, 768)
+            local sx = math.max(0.38, (viewport.X * 0.96) / 760)
+            local sy = math.max(0.38, (viewport.Y * 0.92) / 470)
+            uiScale.Scale = math.min(sx, sy, 1.08)
+        end
+        fitToViewport()
+        if camera then
+            ui.viewportConn = camera:GetPropertyChangedSignal("ViewportSize"):Connect(fitToViewport)
+        end
+    end
+    bindViewport(workspace.CurrentCamera)
+    if ui.cameraConn then pcall(function() ui.cameraConn:Disconnect() end) end
+    ui.cameraConn = workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
+        bindViewport(workspace.CurrentCamera)
+    end)
 
     local topStripe = new("Frame", panel, {
         Name = "AccentStripe",
@@ -262,30 +292,31 @@ local function buildGui()
     new("UIGradient", topStripe, {
         Color = ColorSequence.new({
             ColorSequenceKeypoint.new(0, C.accent),
-            ColorSequenceKeypoint.new(0.55, C.accentBlue),
+            ColorSequenceKeypoint.new(0.54, C.accentBlue),
             ColorSequenceKeypoint.new(1, C.purple),
         }),
         Rotation = 0,
     })
 
+    -- Header bar.
     local header = new("Frame", panel, {
         Name = "Header",
         Position = UDim2.new(0, 0, 0, 3),
-        Size = UDim2.new(1, 0, 0, 60),
+        Size = UDim2.new(1, 0, 0, 58),
         BackgroundTransparency = 1,
         Active = true,
     })
     local iconBadge = new("Frame", header, {
         Name = "BrandMark",
-        Position = UDim2.new(0, 14, 0, 11),
+        Position = UDim2.new(0, 15, 0, 10),
         Size = UDim2.new(0, 38, 0, 38),
-        BackgroundColor3 = Color3.fromRGB(29, 49, 66),
+        BackgroundColor3 = Color3.fromRGB(27, 50, 67),
         BorderSizePixel = 0,
     })
     new("UICorner", iconBadge, { CornerRadius = UDim.new(0, 11) })
-    new("UIStroke", iconBadge, { Color = C.accent, Thickness = 1, Transparency = 0.15 })
+    new("UIStroke", iconBadge, { Color = C.accent, Thickness = 1, Transparency = 0.12 })
     new("UIGradient", iconBadge, {
-        Color = ColorSequence.new(Color3.fromRGB(32, 67, 82), Color3.fromRGB(28, 36, 62)),
+        Color = ColorSequence.new(Color3.fromRGB(38, 76, 91), Color3.fromRGB(24, 34, 60)),
         Rotation = 90,
     })
     new("TextLabel", iconBadge, {
@@ -299,22 +330,22 @@ local function buildGui()
 
     local title = new("TextLabel", header, {
         Name = "Title",
-        Position = UDim2.new(0, 62, 0, 10),
-        Size = UDim2.new(1, -119, 0, 24),
+        Position = UDim2.new(0, 64, 0, 8),
+        Size = UDim2.new(1, -124, 0, 25),
         BackgroundTransparency = 1,
         Text = "Xector Kill farm",
         TextColor3 = C.text,
         Font = Enum.Font.GothamBold,
-        TextSize = 17,
+        TextSize = 18,
         TextXAlignment = Enum.TextXAlignment.Left,
         TextTruncate = Enum.TextTruncate.AtEnd,
     })
-    local subtitle = new("TextLabel", header, {
+    new("TextLabel", header, {
         Name = "Subtitle",
-        Position = UDim2.new(0, 63, 0, 34),
-        Size = UDim2.new(1, -124, 0, 14),
+        Position = UDim2.new(0, 65, 0, 33),
+        Size = UDim2.new(1, -126, 0, 14),
         BackgroundTransparency = 1,
-        Text = "SMART FARMING CONSOLE  /  V7",
+        Text = "SMART FARMING CONSOLE   /   LANDSCAPE EDITION",
         TextColor3 = C.muted,
         Font = Enum.Font.GothamSemibold,
         TextSize = 9,
@@ -323,8 +354,8 @@ local function buildGui()
     })
     local mini = new("TextButton", header, {
         Name = "Minimize",
-        Size = UDim2.new(0, 30, 0, 30),
-        Position = UDim2.new(1, -44, 0, 14),
+        Size = UDim2.new(0, 32, 0, 32),
+        Position = UDim2.new(1, -47, 0, 12),
         BackgroundColor3 = C.row,
         BorderSizePixel = 0,
         AutoButtonColor = false,
@@ -333,32 +364,53 @@ local function buildGui()
         Font = Enum.Font.GothamBold,
         TextSize = 20,
     })
-    new("UICorner", mini, { CornerRadius = UDim.new(0, 9) })
+    new("UICorner", mini, { CornerRadius = UDim.new(0, 10) })
     new("UIStroke", mini, { Color = C.border, Thickness = 1, Transparency = 0.15 })
+    mini.MouseEnter:Connect(function() uiTween(mini, 0.12, { BackgroundColor3 = C.rowHover }) end)
+    mini.MouseLeave:Connect(function() uiTween(mini, 0.12, { BackgroundColor3 = C.row }) end)
 
-    -- Live status card.
+    -- Divider separating the persistent status rail from the scrollable settings column.
+    new("Frame", panel, {
+        Name = "ColumnDivider",
+        Position = UDim2.new(0, 240, 0, 70),
+        Size = UDim2.new(0, 1, 0, 350),
+        BackgroundColor3 = C.border,
+        BackgroundTransparency = 0.28,
+        BorderSizePixel = 0,
+    })
+
+    -- Persistent left rail: status, telemetry and the main action stay visible while settings scroll.
     local statusCard = new("Frame", panel, {
         Name = "StatusCard",
-        Position = UDim2.new(0, 12, 0, 69),
-        Size = UDim2.new(1, -24, 0, 62),
+        Position = UDim2.new(0, 12, 0, 72),
+        Size = UDim2.new(0, 216, 0, 140),
         BackgroundColor3 = C.card,
         BorderSizePixel = 0,
     })
-    new("UICorner", statusCard, { CornerRadius = UDim.new(0, 11) })
-    new("UIStroke", statusCard, { Color = C.border, Thickness = 1, Transparency = 0.35 })
+    new("UICorner", statusCard, { CornerRadius = UDim.new(0, 12) })
+    new("UIStroke", statusCard, { Color = C.border, Thickness = 1, Transparency = 0.32 })
     local liveDot = new("Frame", statusCard, {
         Name = "LiveDot",
-        Position = UDim2.new(0, 14, 0, 14),
-        Size = UDim2.new(0, 7, 0, 7),
-        BackgroundColor3 = C.green,
+        Position = UDim2.new(0, 13, 0, 15),
+        Size = UDim2.new(0, 8, 0, 8),
+        BackgroundColor3 = C.accent,
         BorderSizePixel = 0,
     })
     new("UICorner", liveDot, { CornerRadius = UDim.new(1, 0) })
     ui.liveDot = liveDot
-
+    new("TextLabel", statusCard, {
+        Size = UDim2.new(1, -38, 0, 16),
+        Position = UDim2.new(0, 28, 0, 10),
+        BackgroundTransparency = 1,
+        Text = "SYSTEM STATUS",
+        TextColor3 = C.muted,
+        Font = Enum.Font.GothamBold,
+        TextSize = 10,
+        TextXAlignment = Enum.TextXAlignment.Left,
+    })
     ui.stage = new("TextLabel", statusCard, {
-        Size = UDim2.new(1, -38, 0, 15),
-        Position = UDim2.new(0, 29, 0, 9),
+        Size = UDim2.new(1, -22, 0, 18),
+        Position = UDim2.new(0, 11, 0, 36),
         BackgroundTransparency = 1,
         Text = "STAGE 1/4  •  READY",
         TextColor3 = C.accent,
@@ -367,9 +419,16 @@ local function buildGui()
         TextXAlignment = Enum.TextXAlignment.Left,
         TextTruncate = Enum.TextTruncate.AtEnd,
     })
+    new("Frame", statusCard, {
+        Position = UDim2.new(0, 11, 0, 59),
+        Size = UDim2.new(1, -22, 0, 1),
+        BackgroundColor3 = C.border,
+        BackgroundTransparency = 0.35,
+        BorderSizePixel = 0,
+    })
     ui.status = new("TextLabel", statusCard, {
-        Size = UDim2.new(1, -26, 0, 29),
-        Position = UDim2.new(0, 13, 0, 27),
+        Size = UDim2.new(1, -22, 0, 62),
+        Position = UDim2.new(0, 11, 0, 67),
         BackgroundTransparency = 1,
         Text = "Status: idle",
         TextColor3 = C.text,
@@ -377,41 +436,49 @@ local function buildGui()
         TextSize = 11,
         TextWrapped = true,
         TextXAlignment = Enum.TextXAlignment.Left,
-        TextYAlignment = Enum.TextYAlignment.Center,
+        TextYAlignment = Enum.TextYAlignment.Top,
     })
 
-    -- Compact telemetry card.
     local stats = new("Frame", panel, {
         Name = "TelemetryCard",
-        Position = UDim2.new(0, 12, 0, 138),
-        Size = UDim2.new(1, -24, 0, 52),
+        Position = UDim2.new(0, 12, 0, 222),
+        Size = UDim2.new(0, 216, 0, 91),
         BackgroundColor3 = C.card,
         BorderSizePixel = 0,
     })
-    new("UICorner", stats, { CornerRadius = UDim.new(0, 11) })
-    new("UIStroke", stats, { Color = C.border, Thickness = 1, Transparency = 0.35 })
-    new("Frame", stats, {
-        Name = "Divider",
-        Position = UDim2.new(0, 130, 0, 9),
-        Size = UDim2.new(0, 1, 1, -18),
-        BackgroundColor3 = C.border,
-        BorderSizePixel = 0,
+    new("UICorner", stats, { CornerRadius = UDim.new(0, 12) })
+    new("UIStroke", stats, { Color = C.border, Thickness = 1, Transparency = 0.32 })
+    new("TextLabel", stats, {
+        Size = UDim2.new(1, -22, 0, 13),
+        Position = UDim2.new(0, 11, 0, 7),
+        BackgroundTransparency = 1,
+        Text = "LIVE TELEMETRY",
+        TextColor3 = C.muted,
+        Font = Enum.Font.GothamBold,
+        TextSize = 9,
+        TextXAlignment = Enum.TextXAlignment.Left,
     })
     ui.attempts = new("TextLabel", stats, {
-        Size = UDim2.new(0, 121, 1, -8),
-        Position = UDim2.new(0, 5, 0, 4),
+        Size = UDim2.new(1, -22, 0, 23),
+        Position = UDim2.new(0, 11, 0, 23),
         BackgroundTransparency = 1,
         Text = "Bypass Attempts: 0",
         TextColor3 = C.gold,
         Font = Enum.Font.GothamSemibold,
         TextSize = 10,
-        TextWrapped = true,
-        TextXAlignment = Enum.TextXAlignment.Center,
-        TextYAlignment = Enum.TextYAlignment.Center,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextTruncate = Enum.TextTruncate.AtEnd,
+    })
+    new("Frame", stats, {
+        Position = UDim2.new(0, 11, 0, 48),
+        Size = UDim2.new(1, -22, 0, 1),
+        BackgroundColor3 = C.border,
+        BackgroundTransparency = 0.4,
+        BorderSizePixel = 0,
     })
     ui.ult = new("TextLabel", stats, {
-        Size = UDim2.new(1, -144, 1, -8),
-        Position = UDim2.new(0, 139, 0, 4),
+        Size = UDim2.new(1, -22, 0, 31),
+        Position = UDim2.new(0, 11, 0, 53),
         BackgroundTransparency = 1,
         Text = "Ultimate: 0% / 100%",
         TextColor3 = C.accentBlue,
@@ -422,30 +489,51 @@ local function buildGui()
         TextYAlignment = Enum.TextYAlignment.Center,
     })
 
-    -- Scrollable controls ensure the panel remains usable on smaller screens.
+    local hint = new("TextLabel", panel, {
+        Name = "ScrollHint",
+        Position = UDim2.new(0, 14, 0, 322),
+        Size = UDim2.new(0, 212, 0, 55),
+        BackgroundTransparency = 1,
+        Text = "SETTINGS\nScroll the panel on the right to see every option. Tap a setting to cycle it.",
+        TextColor3 = C.muted,
+        Font = Enum.Font.Gotham,
+        TextSize = 10,
+        TextWrapped = true,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Top,
+    })
+
+    -- Main settings scroller: intentionally shorter than its content so the UI never feels crowded.
     local controls = new("ScrollingFrame", panel, {
         Name = "Controls",
-        Position = UDim2.new(0, 12, 0, 200),
-        Size = UDim2.new(1, -24, 0, 414),
-        BackgroundTransparency = 1,
+        Position = UDim2.new(0, 251, 0, 72),
+        Size = UDim2.new(1, -263, 0, 352),
+        BackgroundColor3 = Color3.fromRGB(12, 19, 32),
+        BackgroundTransparency = 0.16,
         BorderSizePixel = 0,
-        CanvasSize = UDim2.new(0, 0, 0, 404),
-        ScrollBarThickness = 3,
+        CanvasSize = UDim2.new(0, 0, 0, 452),
+        ScrollBarThickness = 4,
         ScrollBarImageColor3 = C.accent,
+        ScrollBarImageTransparency = 0.08,
         ScrollingDirection = Enum.ScrollingDirection.Y,
         VerticalScrollBarInset = Enum.ScrollBarInset.ScrollBar,
+        ElasticBehavior = Enum.ElasticBehavior.Always,
+        ScrollingEnabled = true,
+        Active = true,
     })
+    new("UICorner", controls, { CornerRadius = UDim.new(0, 12) })
+    new("UIStroke", controls, { Color = C.border, Thickness = 1, Transparency = 0.33 })
     local content = new("Frame", controls, {
         Name = "Content",
-        Size = UDim2.new(1, -5, 0, 404),
+        Size = UDim2.new(1, -8, 0, 452),
         BackgroundTransparency = 1,
         BorderSizePixel = 0,
     })
 
     local function section(text, y)
         return new("TextLabel", content, {
-            Size = UDim2.new(1, -4, 0, 14),
-            Position = UDim2.new(0, 2, 0, y),
+            Size = UDim2.new(1, -18, 0, 15),
+            Position = UDim2.new(0, 12, 0, y),
             BackgroundTransparency = 1,
             Text = text,
             TextColor3 = C.muted,
@@ -456,35 +544,39 @@ local function buildGui()
     end
     local function divider(y)
         new("Frame", content, {
-            Size = UDim2.new(1, -8, 0, 1),
-            Position = UDim2.new(0, 4, 0, y),
+            Size = UDim2.new(1, -24, 0, 1),
+            Position = UDim2.new(0, 12, 0, y),
             BackgroundColor3 = C.border,
-            BackgroundTransparency = 0.35,
+            BackgroundTransparency = 0.38,
             BorderSizePixel = 0,
         })
     end
     local function styledButton(name, text, y, h)
         local b = new("TextButton", content, {
             Name = name,
-            Size = UDim2.new(1, -2, 0, h or 27),
-            Position = UDim2.new(0, 1, 0, y),
+            Size = UDim2.new(1, -24, 0, h or 29),
+            Position = UDim2.new(0, 12, 0, y),
             BackgroundColor3 = C.row,
             BorderSizePixel = 0,
             AutoButtonColor = false,
-            Text = text,
+            Text = "   " .. text,
             TextColor3 = C.text,
             Font = Enum.Font.GothamSemibold,
             TextSize = 11,
             TextXAlignment = Enum.TextXAlignment.Left,
+            TextTruncate = Enum.TextTruncate.AtEnd,
         })
-        new("UICorner", b, { CornerRadius = UDim.new(0, 8) })
+        new("UICorner", b, { CornerRadius = UDim.new(0, 9) })
         local stroke = new("UIStroke", b, { Color = C.border, Thickness = 1, Transparency = 0.2 })
+        b.MouseEnter:Connect(function() uiTween(b, 0.12, { BackgroundColor3 = C.rowHover }) end)
+        b.MouseLeave:Connect(function() uiTween(b, 0.16, { BackgroundColor3 = C.row }) end)
         return b, stroke
     end
 
-    section("AUTOMATION OPTIONS", 2)
+    section("AUTOMATION OPTIONS", 5)
     ui.toggles = {}
     ui.toggleKnobs = {}
+    ui.toggleRows = {}
     local rows = {
         { k = "AutoBypass",    t = "01   Auto bypass" },
         { k = "AutoFarm",      t = "02   Auto farm ultimate" },
@@ -495,18 +587,18 @@ local function buildGui()
     }
     for i = 1, #rows do
         local d = rows[i]
-        local y = 20 + (i - 1) * 31
+        local y = 24 + (i - 1) * 34
         local row = new("Frame", content, {
             Name = "Toggle_" .. d.k,
-            Size = UDim2.new(1, -2, 0, 28),
-            Position = UDim2.new(0, 1, 0, y),
+            Size = UDim2.new(1, -24, 0, 30),
+            Position = UDim2.new(0, 12, 0, y),
             BackgroundColor3 = C.row,
             BorderSizePixel = 0,
         })
-        new("UICorner", row, { CornerRadius = UDim.new(0, 8) })
-        new("UIStroke", row, { Color = C.border, Thickness = 1, Transparency = 0.55 })
-        new("TextLabel", row, {
-            Size = UDim2.new(1, -60, 1, 0),
+        new("UICorner", row, { CornerRadius = UDim.new(0, 9) })
+        new("UIStroke", row, { Color = C.border, Thickness = 1, Transparency = 0.53 })
+        local label = new("TextLabel", row, {
+            Size = UDim2.new(1, -68, 1, 0),
             Position = UDim2.new(0, 11, 0, 0),
             BackgroundTransparency = 1,
             Text = d.t,
@@ -518,8 +610,8 @@ local function buildGui()
         })
         local box = new("TextButton", row, {
             Name = "Switch",
-            Size = UDim2.new(0, 38, 0, 21),
-            Position = UDim2.new(1, -47, 0.5, -10.5),
+            Size = UDim2.new(0, 39, 0, 22),
+            Position = UDim2.new(1, -49, 0.5, -11),
             BackgroundColor3 = C.off,
             BorderSizePixel = 0,
             AutoButtonColor = false,
@@ -528,14 +620,17 @@ local function buildGui()
         new("UICorner", box, { CornerRadius = UDim.new(1, 0) })
         local knob = new("Frame", box, {
             Name = "Knob",
-            Size = UDim2.new(0, 15, 0, 15),
-            Position = UDim2.new(0, 3, 0.5, -7.5),
+            Size = UDim2.new(0, 16, 0, 16),
+            Position = UDim2.new(0, 3, 0.5, -8),
             BackgroundColor3 = C.white,
             BorderSizePixel = 0,
         })
         new("UICorner", knob, { CornerRadius = UDim.new(1, 0) })
         ui.toggles[d.k] = box
         ui.toggleKnobs[d.k] = knob
+        ui.toggleRows[d.k] = row
+        row.MouseEnter:Connect(function() uiTween(row, 0.12, { BackgroundColor3 = C.rowHover }) end)
+        row.MouseLeave:Connect(function() uiTween(row, 0.16, { BackgroundColor3 = C.row }) end)
         box.Activated:Connect(function()
             cfg[d.k] = not cfg[d.k]
             if d.k == "AFKLoop" then
@@ -550,10 +645,9 @@ local function buildGui()
         end)
     end
 
-    divider(210)
-    section("TARGET CONTROL", 218)
-
-    ui.kidnap, ui.kidnapStroke = styledButton("KidnapMode", "MODE  /  " .. cfg.KidnapMode, 238, 27)
+    divider(235)
+    section("TARGET CONTROL", 244)
+    ui.kidnap, ui.kidnapStroke = styledButton("KidnapMode", "MODE  /  " .. cfg.KidnapMode, 265, 29)
     ui.kidnap.MouseButton1Click:Connect(function()
         cfg.KidnapMode = MODE_ORDER[cfg.KidnapMode] or "Off"
         if cfg.KidnapMode == "Player" then
@@ -569,11 +663,11 @@ local function buildGui()
         refreshUI(); saveCfg()
     end)
 
-    ui.target, ui.targetStroke = styledButton("KidnapTarget", "TARGET  /  " .. tostring(cfg.KidnapTarget), 270, 27)
+    ui.target, ui.targetStroke = styledButton("KidnapTarget", "TARGET  /  " .. tostring(cfg.KidnapTarget), 301, 29)
     ui.target.MouseButton1Click:Connect(function() cycleTarget(1) end)
     ui.target.MouseButton2Click:Connect(function() cycleTarget(-1) end)
 
-    ui.guard, ui.guardStroke = styledButton("Guard", "HEALTH GUARD  /  " .. cfg.Guard, 302, 27)
+    ui.guard, ui.guardStroke = styledButton("Guard", "HEALTH GUARD  /  " .. cfg.Guard, 337, 29)
     ui.guard.MouseButton1Click:Connect(function()
         cfg.Guard = GUARD_ORDER[cfg.Guard] or "Off"
         refreshUI(); saveCfg()
@@ -588,10 +682,10 @@ local function buildGui()
         refreshUI(); saveCfg()
     end)
 
-    divider(338)
-    section("AFTER COMPLETION", 346)
-    ui.mode, ui.modeStroke = styledButton("EndMode", "END ACTION  /  " .. cfg.EndMode, 366, 27)
-    ui.mode.MouseButton1Click:Connect(function()
+    divider(377)
+    section("AFTER COMPLETION", 386)
+    ui.mode, ui.modeStroke = styledButton("EndMode", "END ACTION  /  " .. cfg.EndMode, 407, 29)
+    ui.mode.Activated:Connect(function()
         cfg.EndMode = (cfg.EndMode == "Hop") and "Leave" or "Hop"
         refreshUI()
         saveCfg()
@@ -599,8 +693,8 @@ local function buildGui()
 
     ui.start = new("TextButton", panel, {
         Name = "StartStop",
-        Size = UDim2.new(1, -24, 0, 42),
-        Position = UDim2.new(0, 12, 0, 625),
+        Size = UDim2.new(0, 216, 0, 48),
+        Position = UDim2.new(0, 12, 0, 398),
         BackgroundColor3 = C.green,
         BorderSizePixel = 0,
         AutoButtonColor = false,
@@ -609,42 +703,56 @@ local function buildGui()
         Font = Enum.Font.GothamBold,
         TextSize = 13,
     })
-    new("UICorner", ui.start, { CornerRadius = UDim.new(0, 11) })
+    new("UICorner", ui.start, { CornerRadius = UDim.new(0, 12) })
     ui.startGradient = new("UIGradient", ui.start, {
-        Color = ColorSequence.new(Color3.fromRGB(39, 205, 132), Color3.fromRGB(25, 157, 133)),
+        Color = ColorSequence.new(Color3.fromRGB(43, 218, 143), Color3.fromRGB(25, 156, 138)),
         Rotation = 0,
     })
-    new("UIStroke", ui.start, { Color = Color3.fromRGB(105, 255, 194), Thickness = 1, Transparency = 0.38 })
+    ui.startStroke = new("UIStroke", ui.start, { Color = Color3.fromRGB(112, 255, 203), Thickness = 1, Transparency = 0.38 })
+    ui.start.MouseEnter:Connect(function()
+        uiTween(ui.start, 0.14, { BackgroundColor3 = running and C.red or Color3.fromRGB(75, 243, 170) })
+    end)
+    ui.start.MouseLeave:Connect(function()
+        uiTween(ui.start, 0.16, { BackgroundColor3 = running and C.red or C.green })
+    end)
 
-    -- Drag from the title area on mouse or touch.
-    local drag, ds, sp
-    title.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1
-            or input.UserInputType == Enum.UserInputType.Touch then
-            drag, ds, sp = true, input.Position, panel.Position
+    -- Drag from the header using touch or mouse.
+    local drag, dragStart, startPos
+    local function beginDrag(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            drag, dragStart, startPos = true, input.Position, panel.Position
             input.Changed:Connect(function()
                 if input.UserInputState == Enum.UserInputState.End then drag = false end
             end)
         end
-    end)
+    end
+    title.InputBegan:Connect(beginDrag)
     if ui.dragConn then pcall(function() ui.dragConn:Disconnect() end) end
     ui.dragConn = UIS.InputChanged:Connect(function(input)
-        if drag and (input.UserInputType == Enum.UserInputType.MouseMovement
-            or input.UserInputType == Enum.UserInputType.Touch) then
-            local d = input.Position - ds
-            panel.Position = UDim2.new(sp.X.Scale, sp.X.Offset + d.X, sp.Y.Scale, sp.Y.Offset + d.Y)
+        if drag and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            local delta = input.Position - dragStart
+            panel.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
         end
     end)
 
     local collapsed = false
-    mini.MouseButton1Click:Connect(function()
+    mini.Activated:Connect(function()
         collapsed = not collapsed
-        panel.Size = collapsed and UDim2.new(0, 344, 0, 63) or PANEL_SIZE
-        mini.Text = collapsed and "+" or "−"
-        for _, child in ipairs(panel:GetChildren()) do
-            if child:IsA("GuiObject") and child ~= header and child ~= topStripe then
-                child.Visible = not collapsed
+        if collapsed then
+            uiTween(panel, 0.2, { Size = UDim2.new(0, 760, 0, 66) })
+            mini.Text = "+"
+            task.delay(0.22, function()
+                if not panel.Parent or not collapsed then return end
+                for _, child in ipairs(panel:GetChildren()) do
+                    if child:IsA("GuiObject") and child ~= header and child ~= topStripe then child.Visible = false end
+                end
+            end)
+        else
+            for _, child in ipairs(panel:GetChildren()) do
+                if child:IsA("GuiObject") and child ~= header and child ~= topStripe then child.Visible = true end
             end
+            mini.Text = "−"
+            uiTween(panel, 0.22, { Size = PANEL_SIZE })
         end
     end)
 end
@@ -680,25 +788,25 @@ paintToggles = function()
         local knob = ui.toggleKnobs and ui.toggleKnobs[key]
         local enabled = cfg[key] == true
         if b then
-            b.BackgroundColor3 = enabled and (C.accent or Color3.fromRGB(37, 226, 205))
-                or (C.off or Color3.fromRGB(43, 55, 75))
+            uiTween(b, 0.18, { BackgroundColor3 = enabled and (C.accent or Color3.fromRGB(48, 235, 214))
+                or (C.off or Color3.fromRGB(43, 55, 76)) })
         end
         if knob then
-            knob.Position = enabled and UDim2.new(1, -18, 0.5, -7.5)
-                or UDim2.new(0, 3, 0.5, -7.5)
-            knob.BackgroundColor3 = enabled and (C.white or Color3.new(1, 1, 1))
-                or Color3.fromRGB(190, 201, 218)
+            uiTween(knob, 0.2, {
+                Position = enabled and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8),
+                BackgroundColor3 = enabled and (C.white or Color3.new(1, 1, 1)) or Color3.fromRGB(190, 201, 218),
+            })
         end
     end
-    if ui.mode then ui.mode.Text = "END ACTION  /  " .. cfg.EndMode end
+    if ui.mode then ui.mode.Text = "   END ACTION  /  " .. cfg.EndMode end
 end
 
 refreshUI = function()
     local C = ui.theme or {}
     if ui.start then
         ui.start.Text = running and "STOP AUTOMATION" or "START AUTOMATION"
-        ui.start.BackgroundColor3 = running and (C.red or Color3.fromRGB(255, 80, 105))
-            or (C.green or Color3.fromRGB(49, 220, 135))
+        uiTween(ui.start, 0.18, { BackgroundColor3 = running and (C.red or Color3.fromRGB(255, 83, 112))
+            or (C.green or Color3.fromRGB(54, 225, 148)) })
         if ui.startGradient then
             ui.startGradient.Color = running
                 and ColorSequence.new(Color3.fromRGB(255, 83, 112), Color3.fromRGB(199, 48, 84))
@@ -706,50 +814,40 @@ refreshUI = function()
         end
     end
     if ui.liveDot then
-        ui.liveDot.BackgroundColor3 = running
-            and (C.green or Color3.fromRGB(49, 220, 135))
-            or (C.accent or Color3.fromRGB(37, 226, 205))
+        uiTween(ui.liveDot, 0.18, { BackgroundColor3 = running
+            and (C.green or Color3.fromRGB(54, 225, 148))
+            or (C.accent or Color3.fromRGB(48, 235, 214)) })
     end
     paintToggles()
     if ui.kidnap then
-        ui.kidnap.Text = "MODE  /  " .. cfg.KidnapMode
-        ui.kidnap.TextColor3 = (cfg.KidnapMode == "Off")
-            and (C.muted or Color3.fromRGB(151, 166, 190))
-            or (C.accent or Color3.fromRGB(37, 226, 205))
-        ui.kidnap.BackgroundColor3 = C.row or Color3.fromRGB(25, 34, 52)
-        if ui.kidnapStroke then
-            ui.kidnapStroke.Color = (cfg.KidnapMode == "Off")
-                and (C.border or Color3.fromRGB(49, 66, 91))
-                or (C.accent or Color3.fromRGB(37, 226, 205))
-        end
+        ui.kidnap.Text = "   MODE  /  " .. cfg.KidnapMode
+        local modeColor = (cfg.KidnapMode == "Off")
+            and (C.muted or Color3.fromRGB(145, 162, 190))
+            or (C.accent or Color3.fromRGB(48, 235, 214))
+        uiTween(ui.kidnap, 0.16, { TextColor3 = modeColor, BackgroundColor3 = C.row or Color3.fromRGB(23, 33, 52) })
+        if ui.kidnapStroke then uiTween(ui.kidnapStroke, 0.16, { Color = (cfg.KidnapMode == "Off") and (C.border or Color3.fromRGB(48, 65, 92)) or modeColor }) end
     end
     if ui.target then
-        ui.target.Text = "TARGET  /  " .. tostring(cfg.KidnapTarget)
+        ui.target.Text = "   TARGET  /  " .. tostring(cfg.KidnapTarget)
         local on = cfg.KidnapMode == "Player"
-        ui.target.TextColor3 = on and (C.accentBlue or Color3.fromRGB(87, 145, 255))
-            or (C.muted or Color3.fromRGB(151, 166, 190))
-        ui.target.BackgroundColor3 = C.row or Color3.fromRGB(25, 34, 52)
-        if ui.targetStroke then
-            ui.targetStroke.Color = on and (C.accentBlue or Color3.fromRGB(87, 145, 255))
-                or (C.border or Color3.fromRGB(49, 66, 91))
-        end
+        local targetColor = on and (C.accentBlue or Color3.fromRGB(95, 151, 255))
+            or (C.muted or Color3.fromRGB(145, 162, 190))
+        uiTween(ui.target, 0.16, { TextColor3 = targetColor, BackgroundColor3 = C.row or Color3.fromRGB(23, 33, 52) })
+        if ui.targetStroke then uiTween(ui.targetStroke, 0.16, { Color = on and targetColor or (C.border or Color3.fromRGB(48, 65, 92)) }) end
     end
     if ui.guard then
-        ui.guard.Text = ("HEALTH GUARD  /  %s  ·  %d%%"):format(cfg.Guard, cfg.MinHealth)
-        ui.guard.TextColor3 = (cfg.Guard == "Off")
-            and (C.muted or Color3.fromRGB(151, 166, 190))
-            or (C.green or Color3.fromRGB(49, 220, 135))
-        ui.guard.BackgroundColor3 = C.row or Color3.fromRGB(25, 34, 52)
-        if ui.guardStroke then
-            ui.guardStroke.Color = (cfg.Guard == "Off")
-                and (C.border or Color3.fromRGB(49, 66, 91))
-                or (C.green or Color3.fromRGB(49, 220, 135))
-        end
+        ui.guard.Text = ("   HEALTH GUARD  /  %s  ·  %d%%"):format(cfg.Guard, cfg.MinHealth)
+        local guardColor = (cfg.Guard == "Off")
+            and (C.muted or Color3.fromRGB(145, 162, 190))
+            or (C.green or Color3.fromRGB(54, 225, 148))
+        uiTween(ui.guard, 0.16, { TextColor3 = guardColor, BackgroundColor3 = C.row or Color3.fromRGB(23, 33, 52) })
+        if ui.guardStroke then uiTween(ui.guardStroke, 0.16, { Color = (cfg.Guard == "Off") and (C.border or Color3.fromRGB(48, 65, 92)) or guardColor }) end
     end
     if ui.mode then
-        ui.mode.Text = "END ACTION  /  " .. cfg.EndMode
-        ui.mode.TextColor3 = C.accentBlue or Color3.fromRGB(87, 145, 255)
-        if ui.modeStroke then ui.modeStroke.Color = C.accentBlue or Color3.fromRGB(87, 145, 255) end
+        ui.mode.Text = "   END ACTION  /  " .. cfg.EndMode
+        local modeColor = C.accentBlue or Color3.fromRGB(95, 151, 255)
+        uiTween(ui.mode, 0.16, { TextColor3 = modeColor, BackgroundColor3 = C.row or Color3.fromRGB(23, 33, 52) })
+        if ui.modeStroke then uiTween(ui.modeStroke, 0.16, { Color = modeColor }) end
     end
 end
 
@@ -1838,7 +1936,7 @@ local function ensureGui()
     if ui.gui and ui.gui.Parent then return end
     local ok = pcall(buildGui)
     if ok and ui.start then
-        ui.start.MouseButton1Click:Connect(startWorker)
+        ui.start.Activated:Connect(startWorker)
         paintToggles(); refreshUI()
     end
 end
@@ -2036,7 +2134,7 @@ end
 --=============================== BOOT ===================================
 loadCfg()
 if guiOk and ui.start then
-    ui.start.MouseButton1Click:Connect(startWorker)
+    ui.start.Activated:Connect(startWorker)
     paintToggles()
     refreshUI()
     say("Ready - press START")
